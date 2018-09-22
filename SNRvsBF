@@ -1,0 +1,78 @@
+from __future__ import division, print_function
+import tupak
+import gwpy
+
+
+duration = 4.
+sampling_frequency = 2048.
+
+def lal_binary_black_hole_echo(
+        frequency_array, mass_1, mass_2, luminosity_distance, a_1, tilt_1,
+        phi_12, a_2, tilt_2, phi_jl, iota, phase, ra, dec, geocent_time, psi,
+        t_echo, **kwargs):
+
+    outdir = 'outdir'
+    label = 'SNR_vs_LB'
+    tupak.core.utils.setup_logger(outdir=outdir, label=label)
+
+    injection_parameters = dict(
+        mass_1=36., mass_2=29., a_1=0.4, a_2=0.3, tilt_1=0, tilt_2=0, phi_12=1.7,
+        phi_jl=0.3, luminosity_distance=250., iota=0.4, psi=2.659, phase=1.3,
+        geocent_time=1126259642.413, ra=1.375, dec=-1.2108, t_echo=0.4, delta_t_echo=0.2, dampener=0.4, gamma=1)
+
+    waveform_arguments = dict(waveform_approximant='IMRPhenomPv2',
+                              reference_frequency=50.)
+
+    waveform_generator1 = tupak.WaveformGenerator(duration=duration,
+                                                 sampling_frequency=sampling_frequency,
+                                                 frequency_domain_source_model=tupak.gw.source.lal_binary_black_hole,
+                                                 parameters=injection_parameters,
+                                                 waveform_arguments=waveform_arguments)
+
+    waveform_generator2 = tupak.WaveformGenerator(duration=duration,
+                                                 sampling_frequency=sampling_frequency,
+                                                 frequency_domain_source_model= lal_binary_black_hole_echo,
+                                                 parameters=injection_parameters,
+                                                 waveform_arguments=waveform_arguments)
+    hf_signal1 = waveform_generator1.frequency_domain_strain()
+    hf_signal2 = waveform_generator2.frequency_domain_strain()
+
+    IFOs1 = [tupak.gw.detector.get_interferometer_with_fake_noise_and_injection(
+            name, injection_polarizations=hf_signal1, injection_parameters=injection_parameters, duration=duration,
+            sampling_frequency=sampling_frequency, outdir=outdir) for name in ['H1', 'L1']]
+    IFOs2 = [tupak.gw.detector.get_interferometer_with_fake_noise_and_injection(
+        name, injection_polarizations=hf_signal2, injection_parameters=injection_parameters, duration=duration,
+        sampling_frequency=sampling_frequency, outdir=outdir) for name in ['H1', 'L1']]
+
+    priors = tupak.gw.prior.BBHPriorSet()
+
+    priors['geocent_time'] = tupak.core.prior.Uniform(
+    minimum=injection_parameters['geocent_time'] - 1, maximum=injection_parameters['geocent_time'] + 1,
+    name='geocent_time', latex_label='$t_c$')
+
+    for key in ['a_1', 'a_2', 'tilt_1', 'tilt_2', 'phi_12', 'phi_jl', 'psi', 'ra', 'dec', 'geocent_time', 'phase']:
+            priors[key] = injection_parameters[key]
+
+    likelihood1 = tupak.GravitationalWaveTransient(interferometers=IFOs1, waveform_generator=waveform_generator1,
+                                                          time_marginalization=False, phase_marginalization=False,
+                                                          distance_marginalization=False, prior=priors)
+
+    likelihood2 = tupak.GravitationalWaveTransient(interferometers=IFOs2, waveform_generator=waveform_generator2,
+                                                          time_marginalization=False, phase_marginalization=False,
+                                                          distance_marginalization=False, prior=priors)
+
+    result = tupak.run_sampler(likelihood=likelihood1, priors=priors, sampler='dynesty', npoints=1000,
+                                   injection_parameters=injection_parameters, outdir=outdir, label=label)
+
+    result_E = tupak.run_sampler(likelihood=likelihood2, priors=priors, sampler='dynesty', npoints=1000,
+                                   injection_parameters=injection_parameters, outdir=outdir, label=label)
+
+    pINE = result.log_evidence
+
+    pIE = result_E.log_evidence
+
+    BF = (pIE)/(pINE)
+
+    print (pINE)
+    print (pIE)
+    print (BF)
